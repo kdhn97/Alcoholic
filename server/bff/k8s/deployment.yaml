@@ -1,0 +1,146 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ns-bff
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bff
+  namespace: ns-bff
+  labels:
+    app: bff
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: bff
+  template:
+    metadata:
+      labels:
+        app: bff
+    spec:
+      nodeSelector:
+        node-role.kubernetes.io/worker: "worker"
+      containers:
+      - name: bff
+        image: tkdqja9573/ssafy-tailored-bff
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+        env:
+        - name: JWT_SECRET_KEY
+          value: "jenkins_will_set_this_jwt_secret"
+        - name: BUNNY_SECRET_KEY
+          value: "jenkins_will_set_this_bunny_secret"
+        - name: FTP_USERNAME
+          value: "jenkins_will_set_this_ftp_username"
+        - name: FTP_PASSWORD
+          value: "jenkins_will_set_this_ftp_password"
+        - name: FTP_HOST
+          value: "jenkins_will_set_this_ftp_host"
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+        resources:
+          requests:
+            cpu: "300m"
+          limits:
+            cpu: "600m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bff
+  namespace: ns-bff
+  labels:
+    app: bff
+spec:
+  ports:
+  - port: 8080
+    targetPort: 8080
+  selector:
+    app: bff
+  type: ClusterIP
+---
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: redirect
+  namespace: ns-bff
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
+---
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: cors
+  namespace: ns-bff
+spec:
+  headers:
+    accessControlAllowMethods:
+      - "GET"
+      - "POST"
+      - "OPTIONS"
+      - "PUT"
+      - "PATCH"
+      - "DELETE"
+    accessControlAllowOriginList:
+      - "http://localhost:3000"
+      - "https://ssafy.picel.net"
+    accessControlAllowHeaders:
+      - "Content-Type"
+      - "Access"
+    accessControlExposeHeaders:
+      - "Access"  
+    accessControlAllowCredentials: true
+    accessControlMaxAge: 100
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: bff-tls
+  namespace: ns-bff
+spec:
+  secretName: bff-tls
+  issuerRef:
+    name: letsencrypt
+    kind: ClusterIssuer
+  commonName: bff.ssafy.picel.net
+  dnsNames:
+  - bff.ssafy.picel.net
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: bff-ingress
+  namespace: ns-bff
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt"
+    acme.cert-manager.io/http01-ingress-class: "traefik"
+    traefik.ingress.kubernetes.io/router.middlewares: "ns-bff-redirect@kubernetescrd,ns-bff-cors@kubernetescrd"
+spec:
+  ingressClassName: traefik
+  rules:
+  - host: bff.ssafy.picel.net
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: bff
+            port:
+              number: 8080
+  tls:
+    - hosts:
+      - bff.ssafy.picel.net
+      secretName: bff-tls
